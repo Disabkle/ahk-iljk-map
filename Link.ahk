@@ -10,7 +10,7 @@ SetWorkingDir %A_ScriptDir% ; Ensures a consistent starting directory.设定工�
 ; #Persistent ; 让脚本持续运行(即直到用户关闭或遇到 ExitApp).
 SetBatchLines, -1 ; 运行速度 -1 满血运行
 #KeyHistory 0 ; 键击历史记录保存 0以关闭提升性能
-ListLines, Off ; 忽略后续键击,可以提升一些性能 禁用无法获得记录
+ListLines, On ; 忽略后续键击,可以提升一些性能 禁用无法获得记录
 #MaxHotkeysPerInterval 200 ; 与下面的一起使用限制一段时间内激活热键的个数
 #HotkeyInterval 2000
 ; ListHotkeys
@@ -29,20 +29,28 @@ S_IsAltTab := 1 ; alt tab 下 iljk 导航
 global S_IsSpaceOn := 1
 global S_IsHiddenIcon := 0 ; 默认关闭, 这会导致 toast 无标题
 global S_IsTrayVolume := 1
-global S_IsStandard := 0 ; 显示标准菜单
+global S_IsStandard := 1 ; 显示标准菜单
 global Version := "Ver 1.3"
 CoordMode, Mouse, Screen
 
+; 鼠标选区实现对应功能
 ; EdgeModel() 添加功能名对应效果
 ; 下面添加鼠标选取区域{功能名:SetArea(xMin[,xMax,yMin,yMax],window[,control],sleep)}  选择 window + control 自动忽略定位区域
 ; 越在此字典靠后位置需要判断的次数就越多, 常用功能考虑往前移
-Edges := {desktop:SetArea(0.95,1,0,0.15)
-         ,volume:SetArea(,,,,"0x201a0",["Windows.UI.Composition.DesktopWindowContentBridge1"
-         ,"TrayClockWClass1","ToolbarWindow323"],0)
-         ,taskview:SetArea(0,0.01,0.35,0.65,,,500)
-         ,window:SetArea(0.35,0.65,0,0.01)
-         ,window1:SetArea(0.05,0.35,0,0.01)
-         ,volume:SetArea(0.87,0.925,0.955,1,,,0)}
+Edges := {volume2:SetArea(,,,,"Shell_TrayWnd" ; ------------------------------------>
+         ,["Windows.UI.Composition.DesktopWindowContentBridge1" ;   任务栏音量控制   ||
+         ,"TrayClockWClass1","ToolbarWindow323"],0) ; ------------------------------>
+         ,taskview:SetArea(0,0.01,0.3,0.55,,,500) ; -----------> 任务视图
+         ,desktop:SetArea(0.98,1,0,0.15,,,120) ; --------------> 虚拟桌面
+         ,altEcs:SetArea(0.35,0.65,0,0.008) ; -----------------> 切换窗口
+         ,altTabt:SetArea(0.05,0.35,0,0.01) ; -----------------> 切换任务
+         ,altcTabt:SetArea(0,0.02,0.55,1,,,80) ; --------------> 切换任务2
+        ;  ,volume:SetArea(0.87,0.925,0.955,1,,,0) ; ------------> 任务栏音量控制
+         ,leftUP:SetArea(0,0,0,0) ; --------------------->
+         ,rightUP:SetArea(1,1,0,0) ;        test         ||
+         ,leftDOWN:SetArea(0,0,1,1) ;                    ||
+         ,rightDOWN:SetArea(1,1,1,1) ;------------------->
+         ,none:SetArea(0,0,0,0,"WorkerW","1",150)}
 
 ; 菜单初始化
 ; Menu, Tray, Icon, 1.ico, , 1 ; 图标 冻结
@@ -76,10 +84,10 @@ return
 ; =======================================================================================================
 ; =======================================================================================================
 ; 编译后删除的功能
-#If not A_IsCompiled
+;@Ahk2Exe-IgnoreBegin
 ^tab::reload ; reload 编译删除
 ^#s::HiddenIcon()
-#If
+;@Ahk2Exe-IgnoreEnd
 
 ; Suspend 开启全部
 ScrollLock::
@@ -93,14 +101,14 @@ alt & i::up
 alt & k::down
 alt & j::left
 alt & l::right
-alt & WheelDown:: right
-alt & WheelUp:: left
+; alt & WheelDown:: right
+; alt & WheelUp:: left
 #If
 
 ; 按住{space}加下列热键
 #If S_IsSpaceOn
 space::Space
-space & i::up
+space & i::Send,{Blind}{up}
 space & j::left
 space & k::down
 space & l::right
@@ -139,10 +147,12 @@ PickColor()
 ; LoopPickColor()
 return 
 
-; 鼠标选区
+; 鼠标选区~
 #If S_IsCurArea
-~WheelUp::EdgeModel(Edge(Edges))
-~WheelDown::EdgeModel(Edge(Edges),2)
+WheelUp::EdgeModel(Edge(Edges))
+WheelDown::EdgeModel(Edge(Edges),2)
+~MButton & wheelUp::send {Blind}{Home}
+~MButton & wheelDown::send {Blind}{End}
 #If
 
 ; 常用音量调节
@@ -153,6 +163,11 @@ return
 ; #If
 
 
+; +`::
+; Winset,AlwaysOnTop,,A
+; ; CoordMode,tooltip,window
+; ; tooltip,<>,0,0
+; return
 
 ; =======================================================================================================
 ; =======================================================================================================
@@ -162,29 +177,50 @@ return
 ; 判断鼠标位置模式
 Edge(Edges){
     ; 循环 Edges 获取区域 只返回第一个匹配的
-    MouseGetPos,curX,curY,win,con
+    MouseGetPos,curX,curY,wid,con
+    WinGetClass, win, ahk_id %wid%
+    ; tooltip, Window: "%win%"  control: "%con%"`ncurX:`t%curX%`tcurY:`t%curY% ; 调试显示
     for model,area in Edges{
-        if (win=area["win"]){
-            for idx,cc in area["con"]
-                if (cc = con)
-                    return {model:model,slp:area["slp"]}
-        }else if (curX < area["x_min"]
+        if area["win"]{ ; 窗口为空或不匹配则跳过
+            if (win!=area["win"]){ 
+                continue
+            }
+            if area["con"]{ ; 不存在控件则进入像素匹配
+                for idx,cc in area["con"] ; 控件不匹配跳过
+                    if (cc = con)
+                        return {model:model,slp:area["slp"]}
+                ; tooltip, %model% notfind"control"
+                continue
+            }
+            ; todo 此位置可以做窗口无控件的相对位置处理
+            ; tooltip,%model%
+        }
+        if (curX < area["x_min"] ; 像素匹配
+        or curY > area["y_max"]
         or curX > area["x_max"]
-        or curY < area["y_min"]
-        or curY > area["y_max"])
-            continue
-        return {model:model,slp:area["slp"]} ; 返回通过的模式
+        or curY < area["y_min"])
+            continue ; 其中一项为真则跳过该 model
+        return {model:model,slp:area["slp"]} ; 返回通过的 model
     }
 }
 
+
 ; 按模式执行
 EdgeModel(model,t=0){
+    if not model{
+        Send % t ? "{WheelDown}"   : "{WheelUp}"
+        return
+    }
     switch model["model"]{
-        case "desktop": Send % t ? "^#{right}" : "^#{left}"
-        case "taskview": Send % t ? "#{tab}" : "#{tab}"
-        case "window": Send % t ? "!{tab}" : "!{tab}"
-        case "window1": SendEvent % t ? "!{Esc}" : "+!{Esc}"
-        case "volume" : Send % t ? "{Volume_Down}" : "{Volume_Up}"
+        ; todo
+        ; Default         : Send % t ? "{WheelDown}"   : "{WheelUp}"
+        case "desktop"  : Send % t ? "^#{right}"     : "^#{left}"
+        case "taskview" : Send % t ? "#{tab}"        : "#{tab}"
+        case "altTabt"  : Send % t ? "!{tab}"        : "!{tab}"
+        case "altEcs"   : SendEvent % t ? "!{Esc}"   : "+!{Esc}"
+        case "volume"   : Send % t ? "{Volume_Down}" : "{Volume_Up}"
+        case "volume2"  : Send % t ? "{Volume_Down}" : "{Volume_Up}"
+        case "altcTabt" : Send % t ? "^!{tab}"       : "^!+{tab}"
     }
     sleep model["slp"]
 }
@@ -194,11 +230,11 @@ CopyGetPath(){
     ; KeyWait, LButton, D
     clipboard := ""
     send ^c
-    ClipWait, 1
+    ClipWait, 2, 1
     if not ErrorLevel {
     clipboard := clipboard ; ctrl c 保存的是路径
     SetTimer, RemoveToolTip, -2000
-    tooltip, >>  %clipboard%  << ;提示文本
+    tooltip, %clipboard% ;提示文本
     }
 }
 
@@ -273,14 +309,12 @@ LoopPickColor()
 }
 
 SetArea(xMin=0,xMax=0,yMin=0,yMax=0,win="",con="",slp=150){
-    ; if not (win and con){
-    ;     return
-    ; }
-    ; 参数不能为负数
-    return {x_min:A_ScreenWidth * xMin
-            ,x_max:A_ScreenWidth * xMax
-            ,y_min:A_ScreenHeight * yMin
-            ,y_max:A_ScreenHeight * yMax
+    w := % win ? 1 : A_ScreenWidth-1
+    h := % win ? 1 : A_ScreenHeight-1
+    return {x_min:w * xMin
+            ,x_max:w * xMax
+            ,y_min:h * yMin
+            ,y_max:h * yMax
             ,win:win,con:con,slp:slp}
 }
 
@@ -306,7 +340,7 @@ Init(){
     if not GetKeyState("ScrollLock","T"){
         Suspend, On
         Menu, Tray, Icon, 2.ico, , 1
-        TrayTip, , >->-> @~@ Is suspend <-<-<, , 16
+        TrayTip, , >->-> win + alt + space to open <-<-<, , 16
     }
     Else{ 
         TrayTip, , >->-> Running <-<-<, , 16
